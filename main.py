@@ -3,12 +3,9 @@ import numpy as np
 import wave
 import io
 import os
-from openai import OpenAI
+import requests
 
 app = Flask(__name__)
-
-# 🔑 MUST be set in Render Environment Variables
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 # ---------------------------
 # Convert ESP32 samples → WAV
@@ -24,28 +21,42 @@ def samples_to_wav(samples):
         wf.writeframes(audio.tobytes())
 
     buffer.seek(0)
-    buffer.name = "audio.wav"
     return buffer
 
 # ---------------------------
-# Whisper transcription
+# Deepgram Speech-to-Text
 # ---------------------------
-def transcribe(wav_file):
-    result = client.audio.transcriptions.create(
-        model="whisper-1",
-        file=wav_file
-    )
-    return result.text
+def transcribe_audio(wav_file):
+    api_key = os.environ.get("DEEPGRAM_API_KEY")
+
+    if not api_key:
+        raise Exception("Missing DEEPGRAM_API_KEY in environment variables")
+
+    url = "https://api.deepgram.com/v1/listen"
+
+    headers = {
+        "Authorization": f"Token {api_key}",
+        "Content-Type": "audio/wav"
+    }
+
+    response = requests.post(url, headers=headers, data=wav_file)
+
+    result = response.json()
+
+    # extract text safely
+    text = result["results"]["channels"][0]["alternatives"][0]["transcript"]
+
+    return text
 
 # ---------------------------
-# HOME
+# Home route
 # ---------------------------
 @app.route("/")
 def home():
-    return "Whisper Voice Server Running"
+    return "ESP32 Deepgram Voice Server Running"
 
 # ---------------------------
-# MAIN UPLOAD ENDPOINT
+# Upload route (ESP32 sends here)
 # ---------------------------
 @app.route("/upload", methods=["POST"])
 def upload():
@@ -55,13 +66,11 @@ def upload():
 
         print("Received samples:", len(samples))
 
-        # convert audio
         wav_file = samples_to_wav(samples)
 
-        # Whisper AI
-        text = transcribe(wav_file)
+        text = transcribe_audio(wav_file.read())
 
-        print("TRANSCRIBED:", text)
+        print("VOICE TEXT:", text)
 
         return jsonify({
             "status": "ok",
@@ -75,5 +84,8 @@ def upload():
             "message": str(e)
         })
 
+# ---------------------------
+# Run server
+# ---------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
