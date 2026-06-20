@@ -8,19 +8,20 @@ import requests
 app = Flask(__name__)
 
 # -------------------------
-# CONVERT SAMPLES → WAV
+# CONVERT ESP32 SAMPLES → WAV
 # -------------------------
 def samples_to_wav(samples):
+    # convert to int16 PCM
     audio = np.array(samples, dtype=np.int16)
 
-    # normalize signal (IMPORTANT)
-    audio = audio * 16
+    # clamp values (prevents distortion crashes)
+    audio = np.clip(audio, -32768, 32767)
 
     buffer = io.BytesIO()
 
     with wave.open(buffer, "wb") as wf:
         wf.setnchannels(1)
-        wf.setsampwidth(2)
+        wf.setsampwidth(2)   # 16-bit audio
         wf.setframerate(8000)
         wf.writeframes(audio.tobytes())
 
@@ -28,10 +29,14 @@ def samples_to_wav(samples):
     return buffer
 
 # -------------------------
-# DEEPGRAM STT
+# DEEPGRAM TRANSCRIPTION
 # -------------------------
 def transcribe_audio(wav_bytes):
     api_key = os.environ.get("DEEPGRAM_API_KEY")
+
+    if not api_key:
+        print("❌ Missing DEEPGRAM_API_KEY")
+        return ""
 
     url = "https://api.deepgram.com/v1/listen"
 
@@ -42,22 +47,25 @@ def transcribe_audio(wav_bytes):
 
     response = requests.post(url, headers=headers, data=wav_bytes)
 
-    result = response.json()
-
     try:
-        text = result["results"]["channels"][0]["alternatives"][0]["transcript"]
-    except:
-        text = ""
+        result = response.json()
 
-    return text
+        text = result["results"]["channels"][0]["alternatives"][0]["transcript"]
+
+        return text
+
+    except Exception as e:
+        print("❌ Deepgram parse error:", e)
+        print("RAW RESPONSE:", response.text)
+        return ""
 
 # -------------------------
-# COMMAND SYSTEM
+# SIMPLE COMMAND ENGINE
 # -------------------------
 def process_command(text):
     text = text.lower()
 
-    print("COMMAND TEXT:", text)
+    print("🧠 TEXT RECEIVED:", text)
 
     if "activate command panel" in text:
         return "COMMAND_PANEL_ON"
@@ -75,16 +83,26 @@ def process_command(text):
 # -------------------------
 @app.route("/")
 def home():
-    return "ESP32 Voice System Running"
+    return "ESP32 Voice Server Running"
 
 @app.route("/upload", methods=["POST"])
 def upload():
     try:
         data = request.json
+        samples = data.get("samples", [])
 
-        samples = data["samples"]
+        print("\n📥 Samples received:", len(samples))
 
-        print("\nSamples received:", len(samples))
+        if len(samples) == 0:
+            return jsonify({
+                "status": "error",
+                "text": "",
+                "command": "NO_AUDIO"
+            })
+
+        # DEBUG AUDIO RANGE
+        print("🔎 FIRST 10 SAMPLES:", samples[:10])
+        print("🔎 MAX:", max(samples), "MIN:", min(samples))
 
         wav_file = samples_to_wav(samples)
 
@@ -92,8 +110,8 @@ def upload():
 
         command = process_command(text)
 
-        print("TEXT:", text)
-        print("COMMAND:", command)
+        print("📝 FINAL TEXT:", text)
+        print("⚡ COMMAND:", command)
 
         return jsonify({
             "status": "ok",
@@ -102,12 +120,12 @@ def upload():
         })
 
     except Exception as e:
-        print("ERROR:", e)
+        print("❌ SERVER ERROR:", e)
 
         return jsonify({
             "status": "error",
             "text": "",
-            "command": "NONE"
+            "command": "ERROR"
         })
 
 # -------------------------
