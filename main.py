@@ -1,94 +1,51 @@
-import network
-import urequests
-import ujson
-import time
-from machine import ADC, Pin
-import gc
+from flask import Flask, request, jsonify
+import json
 
-# ---------------- WIFI ----------------
-ssid = "YOUR_WIFI_NAME"
-password = "YOUR_WIFI_PASSWORD"
+app = Flask(__name__)
 
-wifi = network.WLAN(network.STA_IF)
-wifi.active(True)
-wifi.connect(ssid, password)
+# ---------------- HOME ----------------
+@app.route("/")
+def home():
+    return "ESP32 Voice Server Running"
 
-print("Connecting WiFi...")
-
-timeout = 15
-while not wifi.isconnected() and timeout > 0:
-    time.sleep(1)
-    timeout -= 1
-
-if not wifi.isconnected():
-    raise Exception("WiFi Failed")
-
-print("WiFi Connected:", wifi.ifconfig())
-
-# ---------------- MIC ----------------
-mic = ADC(Pin(35))
-mic.atten(ADC.ATTN_11DB)
-mic.width(ADC.WIDTH_12BIT)
-
-SERVER_URL = "https://esp-vocie.onrender.com/upload"
-
-# ---------------- RECORD ----------------
-def record_audio(duration_ms=1500):
-    samples = []
-    start = time.ticks_ms()
-
-    while time.ticks_diff(time.ticks_ms(), start) < duration_ms:
-        val = mic.read()
-
-        # center signal
-        val = val - 2048
-
-        # clamp (prevents clipping)
-        if val > 1200:
-            val = 1200
-        if val < -1200:
-            val = -1200
-
-        samples.append(val)
-
-        time.sleep_ms(2)
-
-    return samples
-
-# ---------------- SEND ----------------
-def send_audio(samples):
+# ---------------- UPLOAD ----------------
+@app.route("/upload", methods=["POST"])
+def upload():
     try:
-        gc.collect()
+        print("\n==================== NEW REQUEST ====================")
 
-        # LIMIT SIZE (VERY IMPORTANT)
-        samples = samples[:800]
+        # RAW DATA CHECK
+        raw = request.data
+        print("RAW DATA:", raw)
 
-        payload = ujson.dumps({"samples": samples})
+        # decode JSON safely
+        data = json.loads(raw)
 
-        print("\nSending samples:", len(samples))
+        samples = data.get("samples", [])
 
-        r = urequests.post(
-            SERVER_URL,
-            data=payload,
-            headers={"Content-Type": "application/json"}
-        )
+        print("📥 Samples received:", len(samples))
 
-        print("Response:", r.text)
-        r.close()
+        if len(samples) > 0:
+            print("🔎 MIN:", min(samples))
+            print("🔎 MAX:", max(samples))
+        else:
+            print("⚠️ EMPTY SAMPLES")
 
-        gc.collect()
+        print("====================================================\n")
+
+        return jsonify({
+            "status": "ok",
+            "samples": len(samples)
+        })
 
     except Exception as e:
-        print("Error:", e)
+        print("❌ ERROR:", e)
 
-# ---------------- LOOP ----------------
-while True:
-    print("\n🎤 Recording...")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        })
 
-    samples = record_audio()
-
-    print("Samples captured:", len(samples))
-
-    send_audio(samples)
-
-    time.sleep(2)
+# ---------------- RUN ----------------
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
